@@ -40,3 +40,64 @@ Bitcoin uses Hashcash, a Proof-of-Work algorithm that was initially developed to
 2. If it doesn't, increase the counter and repeat the steps 3 and 4.
 
 24 is an arbitrary number, our goal is to have a target that takes less than 256 bits in memory. And we want the difference to be significant enoguh, but not too big, because the bigger the difference the more difficult it's to find a proper hash
+
+## Persistence and CLI
+
+So far, we've built a blockchain with a proof-of-work system, which makes mining possiblem. We need to store a blockchain in a database, after that we will make a simple command-line interface to perform operations with the blockchain.
+Blockchain is distributed but now and focus on the database part
+
+## What We Use
+
+We will use BoltDB, because:
+1. It's simple and minimalistic.
+2. It's implemented in Go.
+3. It doesn't require to run a server
+4. It allows to build the data structure we want
+
+BoltDB is a key/value storage. Key/Value pairs are stored in buckets, which are  intended to group similar pairs. There are no datatypes and it is just a byte array whcih meains we need to serialize them. We will use encoding/gob because it is simple and is the part of standard Go library. We will need to serialize Go structs , implement a mechanism of converting a Go struct into a byte array and restoring it back from a byte array.
+
+## Database Structure
+
+We will use two buckets to store data:
+
+1. `blocks` stores metadata 
+2. `chainstate` store the state of a chain, which is all currently unspent transaction outputs and some metadata
+
+We will store the whole DB as a single file, without storing blocks in separate files. So we won't need anything related to file numbers.:
+
+`32-byte block-hash -> Block structure (serialized)`
+`'l' -> the hash of the last block in a chain`
+
+When it comes to BoltDB, operations with a database are run withing a transaction. And there are two types of transactions: 
+read only and read-write.
+
+Also we store DB connection, because we want it open it once and keep it open while the program is running. Thus,the Blockchain structure now looks like this:
+```go
+type Blockchain struct {
+    top []byte
+    db *bolt.DB
+}
+```
+
+From now on we need to store blocks in the DB.
+All new blocks are now saved in a database, so we can reopen a blockchain and add a new block to it.
+But after implementing this, we lost a nice feature:
+we cannot print out blockchain blocks anymore because we don't store blocks in an array any longer. Let's fix this flaw!
+
+BoltDB allows to iterate over all the keys in a bucket, but the keys are stored in byte-sorted order, and we want blocks to be printed in the order they take in a blockchain. 
+Also, because we don't want to load all the blocks into memory (our blockchain DB could be huge!.. or let's just pretend it could), we'll read them one by one. For this purpose, we'll need a blockchain iterator
+
+## CLI
+
+Until now our implementation hasn't provided any interface to interact with the program: we've simply executed `NewBlockChain`,`bc.AddBlock`
+
+We want to have these commands:
+`blockchain_go addblock "Pat 0.0333 for a coffee"`
+`blockchain_go printchain`
+
+All command-line related operations will be processed by the `CLI` struct
+```go
+type CLI struct {
+    bc *Blockchain
+}
+```
