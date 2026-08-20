@@ -101,3 +101,100 @@ type CLI struct {
     bc *Blockchain
 }
 ```
+
+## Transactions
+
+Transactions are the heart of Bitcoin and the only purpose of blockchain is to store transactions in a secure and reliable way, so no would modify them after they are created.
+
+If you have developed a web app, in order to implement payments you would likely to create `accounts` and `transactions` tables.
+In Bitcoin, payments are realized in completely different way. There are:
+1. No accounts.
+2. No balances.
+3. No addresses.
+4. No coins.
+5. No senders and receivers
+
+Since blockchain is a public and open db, we don't want to store sensitive data about wallet owners.
+
+### Bitcoin Transaction
+
+A transaction is a combination of inputs and outputs
+
+```go
+type Transaction struct {
+    ID []byte
+    Vin []TXInput
+    Vout []TXOutput
+}
+```
+Inputs of a new transaction reference outputs of a prev transaction.(there is an exception though which will be discusssed later).
+Outputs are where coints are actually stored.
+
+`ScriptPubKey` will store an arbitrary string(user defined wallet address).
+One important thing about outputs is that they are **indivisible**.
+
+Here is the input of the transaction
+
+```go
+type TXInput struct {
+Txid []byte
+Vout int
+ScriptSig string
+}
+```
+`ScriptSig` is a script which provides data to be used in an output's `ScriptPubKey`. 
+If the data is correct the output can be unlocked, and its value can be used to generate new outputs; if it's not correct, the output cannot be referenced in the input. This is the mechanism that guarantees that users cannot spend coins belonging to other people.
+
+We will implement keys and signatures checking in the next one, currently it `ScriptSig` will be store an arbitrary user defined wallet address.
+
+Let's sum it up. Outputs are where "coins" are stored. Each output comes with an unclocking script, which determines the logic of unlocking the output.
+Every new transaction must have at least one input one output. An input references an output from a previous transaction and provides data (the `ScriptSig` field) that is used in the output's unlocking script to unlock and use its value to create new outputs.
+
+But what came first: inputs or outputs?
+
+# The egg
+
+In Bitcoin, it's the egg that came before the chicken. The inputs-referencing-outputs logic is the classical "chicke or the egg" situation:
+inputs produce outputs and outputs make inputs possible. And in Bitcoin, outputs come before inputs.
+
+When a miner starts mining a block, it adds a coinbase transaction to it. A `coinbase transaction` is a special type of transactions, which doesn't require previously existing outputs. It creates outputs ("coins") out of nowhere
+The egg without a chicken. This is the reward miners get for mining new blocks.
+
+As you know, there’s the genesis block in the beginning of a blockchain. It’s this block that generates the very first output in the blockchain. And no previous outputs are required since there are no previous transactions and no such outputs.
+
+Coinbase transaction has only one input. In our implementation its Txid is empty and `Vout` equals to -1. Also a coinbase transaction doesn't store a script in `ScriptSig`. Instead an arbitrary data is stored there.
+
+`subsidy` is the amount of reward. In Bitcoin, this number is not stored anywhere and calculated based only on the total number blocks:
+the number of blocks divided by `210000`. Mining the genesis block produced 50 BTC, and every 210000 blocks the reward is halved. In our implementation, we will store the reward as a constanst (at least for now)
+
+### Storing Transactions In Blockchain
+
+From now on, every block must store at least one transaction and it's no more possible to mine blocks without transactions. This means that we should remove the `Data` field of `Block` and store transactions instead
+
+Again, we are using hashing as a mechanism of providing unique representation of data. We want all transactions in a block to be uniquely identified by single hash
+
+## Unspent Transaction Outputs
+
+Wen eed to find all unspent transaction outputs. Unspent means that these outputs weren't referenced in any inputs.
+
+Of course, when we check balance, we don't need all of them, but only those can be unblocked by the key we own (currently we don't have keys implemented and will use user defined addresses instead). First let's define locking-unlocking methods on inputs and outputs.
+
+Since transactions are stored in blocks, we have to check every block in a blockchain. We start with outputs:
+
+```go
+if out.CanBeUnlockedWith(address) {
+	unspentTXs = append(unspentTXs, tx)
+}
+```
+
+If an output was locked by the same address we're searching unspent transaction outputs for, then this is the output we want. But before taking it, we need to check if an output was already referenced in an input:
+
+```go
+if spentTXOs[txID] != nil {
+    for _, spentOut := range spentTXOs[txID] {
+        if spentOut == outIdx {
+            continue Outputs
+        }
+    }
+}
+```
