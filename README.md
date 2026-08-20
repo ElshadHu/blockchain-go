@@ -268,3 +268,28 @@ Thus, the above mentioned decoded public key consists of three parts:
 
 Version  Public key hash                           Checksum
 00       62E907B15CBF27D5425399EBF6F0FB50EBB88F18  C29B7D93    
+
+Overall structure for base58 is 
+
+                Public Key
+                  |
+            RIPEMD160(SHA256(PubKey))
+                        |            |
+    Version+            Public key has      +        SHA256 (SHA256(PubKeyHash))
+
+                    |
+                    Base58Encode
+                    |
+                    BitcoinAddress
+
+
+## Wallet
+
+A wallet is nothing but a key pair. We'll also need the Wallets type to keep a collection of wallets, save them to file, and load them from it. in the construction function os `Wallet` a new key pair is generated.
+
+Heare are the steps to convert a public key into Base58 address:
+1. Take the public key and hash it twice with RIPEMD(SHA256(PubKey)) hashing algorithms
+2. Prepend the version of the address generation algo to the hash
+3. Calculate the checksum by hashing the result of step 2 with SHA256(SHA256(payload)). The checksum is the first four bytes of the resulted hash
+4. Append the checksum to the `version + PubKeyHash` combination
+4. Encode the `version + PubKeyHash + checksum` combination with Base58
