@@ -198,3 +198,73 @@ if spentTXOs[txID] != nil {
     }
 }
 ```
+
+## Public-key Cryptography
+
+Public-key cryptography algorithms use pairs of keys: public and private keys. Public keys are not sensitive and can be disclosed to anyone.
+
+Private and public keys are just random sequences of bytes, thus they cannot be printed on the screen and read by a human. That’s why Bitcoin uses an algorithm to convert public keys into a human readable string.
+
+
+## Digital Signatures
+
+In maths and cryptography there is a concept of digital signature - algorithms that guarantee:
+1. that data wasn't modified while being transferred from a sender to a recipient
+2. that data was created by a certain sender
+3. that the sender cannot deny sending the data
+
+Digital signing happens with the usage of private key, and verification requires a public key.
+
+ In order to sign we need two things:
+ 1. data to sign;
+ 2. private key;
+
+ The operation of signing produces a signature, which is stored in transaction inputs. In order to verify a signature, the following is required:
+
+ 1. data that was signed
+ 2. the signature
+ 3. public key
+
+
+ Digital signatures are not encryption, you cannot reconstruct the data from a signature. This is similar to hashing: you run data through a hashing algorithm and get a unique representation of the data. The difference between signatures and hashes is key pairs: they make signature verification possible.
+But key pairs can also be used to encrypt data: a private key is used to encrypt, and a public key is used to decrypt the data. Bitcoin doesn’t use encryption algorithms though.
+
+Every transaction input in Bitcoin is signed by the one who created transaction. Every transaction must be verified before being put in a block. Verification means:
+1. Checking that inputs have permission to use outputs from previous transactions
+2. Checking that the transaction signature is correct.
+
+Schematically it loos like this
+
+                    Signing
+    Private Key  + Data  = Signature
+    key/pair        Copy     Copy
+                    Verification
+    Public Key  + Data   = Signature
+
+
+Let's now review the full lifecycle of the transaction:
+1. In the beginning, there is the genesis block that contains a coinbase transaction. there are no real inputs in coinbase transactions, so signing is not necessary.
+The output of the coinbase transaction contains a hashed public key
+2. When one sends coins, a transaction is created. Inputs of the transaction will reference outpus from prev transactions. Every input will store a public key (not hashed) and a signature of the whole transaction
+3. Other nodes in the Bitcoin netwoek that receive the transaction will verify it. Besides other thing, they will check that:
+the hash of the public key in an input matchs the hash of the referenced output (this ensures that the sender spends only coins belonging to them); the signature is correct.
+4. When a miner node is ready to mine a new block, it'll put the transaction in a block and start mining it
+5. When the block is mined, every other node in the network receives a message saying the block is mined and adds the block to the blockchain.
+5. After the block is added to the block chain, the transaction is completed, its outputs can be referenced in new transactions.
+
+## Elliptic Curve Cryptography
+
+Public and private keys are sequences of random bytes.
+Since it's private keys are used to identify owners of coins, there's a required condition: the randomness algorithm must produce truly random bytes. We don't want to accidentally generate a private key that's owned by someone else. What we need to know is that these curves can be used to generate really big and random numbers
+
+## Base58
+
+Bitcoinused the Base58 algorithm to convert public keys into human readable format. The algorithm is very similar
+to a famous Base64, but it uses shorter alphabet: some letters were removed from the alphabet to avoid some attacks that use letters similarity.
+Thus, there are no these symbols: 0 (zero), O (capital o), I (capital i), l (lowercase L), because they look similar. Also, there are no + and / symbols.
+
+
+Thus, the above mentioned decoded public key consists of three parts:
+
+Version  Public key hash                           Checksum
+00       62E907B15CBF27D5425399EBF6F0FB50EBB88F18  C29B7D93    
