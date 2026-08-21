@@ -293,3 +293,5 @@ Heare are the steps to convert a public key into Base58 address:
 3. Calculate the checksum by hashing the result of step 2 with SHA256(SHA256(payload)). The checksum is the first four bytes of the resulted hash
 4. Append the checksum to the `version + PubKeyHash` combination
 4. Encode the `version + PubKeyHash + checksum` combination with Base58
+
+Notice, we no longer use `ScriptPubKey` and `ScriptSig` fields, because we are not going to implement a scripting language. . Instead, ScriptSig is split into Signature and PubKey fields, and ScriptPubKey is renamed to PubKeyHash. We’ll implement the same outputs locking/unlocking and inputs signing logics as in Bitcoin, but we’ll do this in methods instead.
