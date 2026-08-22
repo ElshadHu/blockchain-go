@@ -295,3 +295,30 @@ Heare are the steps to convert a public key into Base58 address:
 4. Encode the `version + PubKeyHash + checksum` combination with Base58
 
 Notice, we no longer use `ScriptPubKey` and `ScriptSig` fields, because we are not going to implement a scripting language. . Instead, ScriptSig is split into Signature and PubKey fields, and ScriptPubKey is renamed to PubKeyHash. We’ll implement the same outputs locking/unlocking and inputs signing logics as in Bitcoin, but we’ll do this in methods instead.
+
+
+
+### The UTXO Set
+
+we told the way Bitcoin Core stores blocks in a database. It was said that blocks are stored in blocks and db and transaction outputs are stored in blocks db and transaction outputs are stored in chainstate.
+
+Since that article, we’ve already implemented transactions, but we haven’t used the chainstate to store their outputs. So, this is what we’re going to do now.
+
+chainstate doesn’t store transactions. Instead, it stores what is called the UTXO set, or the set of unspent transaction outputs. Besides this, it stores “the block hash up to which the database represents the unspent transaction outputs”, which we’ll omit for now because we’re not using block heights (but we’ll implement them in next articles).
+
+The function finds transactions with unspent outputs. Since transactions are stored in blocks, it iterates over each block in the blockchain and checks every transaction in it. As of September 18, 2017, there’re 485,860 blocks in Bitcoin and the whole database takes 140+ Gb of disk space. This means that one has to run a full node to validate transactions. Moreover, validating transactions would require iterating over many blocks.
+
+The solution to the problem is to have an index that stores only unspent outputs, and this is what UTXO set does: this is a cache that is built from all blockchain transactions (by iterating over blocks,yes, but this is done only once), and is later used to calculate balance and validate new transactions. The UTXO set is about 2.7 GB as of sep of 2017.
+
+Blockchain.FindUnspentTransactions – the main function that finds transactions with unspent outputs. It’s this function where the iteration of all blocks happens.
+Blockchain.FindSpendableOutputs – this function is used when a new transaction is created. If finds the enough number of outputs holding required amount. Uses Blockchain.FindUnspentTransactions.
+Blockchain.FindUTXO – finds unspent outputs for a public key hash, used to get balance. Uses Blockchain.FindUnspentTransactions.
+Blockchain.FindTransaction – finds a transaction in the blockchain by its ID. It iterates over all blocks until finds it.
+
+So what we want is the following methods:
+
+1. `Blockchain.FindUTXO` - find all unspent outputs by iterating over blocks
+2. `UTXOSet.Reindex` - uses `FindUTXO` to find unspent outputs, and stores them in a db. This where caching happens.
+3. `UTXOSet.FindSpendableOutputs` - – analog of Blockchain.FindSpendableOutputs, but uses the UTXO set.
+4. UTXOSet.FindUTXO - analog of `Blockchain.FindUTXO` but uses the UTXO set.
+5. `Blockchain.FindTransaction` remains the same.
