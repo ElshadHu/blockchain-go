@@ -13,7 +13,7 @@ var (
 )
 
 // targetBits is the difficulty of mining
-const targetBits = 24
+const targetBits = 16
 
 type ProofOfWork struct {
 	block  *Block
