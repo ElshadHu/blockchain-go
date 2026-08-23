@@ -322,3 +322,22 @@ So what we want is the following methods:
 3. `UTXOSet.FindSpendableOutputs` - – analog of Blockchain.FindSpendableOutputs, but uses the UTXO set.
 4. UTXOSet.FindUTXO - analog of `Blockchain.FindUTXO` but uses the UTXO set.
 5. `Blockchain.FindTransaction` remains the same.
+
+## Merkle Tree
+
+There is one more optimization mechanism I'd like to discuss in this post.
+
+As it was said above, the full Bitcoin database (blockchain) takes more than 140 GB of disk space. Because of the decentralized nature of Bitcoin, every node in the network must be independent and self-sufficient, every node must store a full copy of the blockchain. With many people starting using Bitcoin, this rule becomes more difficult to follow: it's not likely that everyone will run a full node. Also since nodes are full-fledged participants of the network, they have responsibilities: they must verify transactions and blocks. Also there's certain internet traffic required to interact with other nodes and download new blocks.
+
+In the original Bitcoin paper, there is a solution for this: Simplified Payment Verification (SPV). SPW is a light Bitcoin node that doesn't download the whole blockchain and doesn't verify blocks and transactions.
+Instead, it finds transactions in blocks (to verify payments) and is linked to a full node to retrieve just necessary data.This mechanism allows having multiple light wallet nodes with running just one full node.
+
+For SPV to be possible, there should be a way to check if a block contains certain transaction without downloading the whole block. And this is where Merkle tree comes into play.
+
+Merkle trees are used by Bitcoin to obtain transactions hash, which is then saved in block headers and is considered by the proof-ow-work system. Until now, we just concatenated hashes of each transaction in a block and applied SHA256 to them. This is also a good way of getting a unique represatation.This is also a good way of getting a unique representation of block transactions, but it doesn’t have benefits of Merkle trees.
+
+The number of the leaves in the merkle tree must be even. If it is odd, in that case there the last transaction is duplicated (in the merkle tree, not in the block)
+
+Moving from the bottom up, leaves are grouped in pairs, their hashes are concatenated and a new hash is obtained from the concatenated hashes. The new hashes form new tree nodes. This process is repeated until there's just one node, which is called the root of the tree. The root hash is then used as the unique representation of the transactions, is saced in block headers, and is used in the proof-of-work system
+
+The benefit of Merkle trees is that a node can verify membership of certain transaction without downloading the whole block. Just a transaction hash, a Merkle tree root hash, and merkle path are required for this.
