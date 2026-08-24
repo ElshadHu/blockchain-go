@@ -341,3 +341,48 @@ The number of the leaves in the merkle tree must be even. If it is odd, in that 
 Moving from the bottom up, leaves are grouped in pairs, their hashes are concatenated and a new hash is obtained from the concatenated hashes. The new hashes form new tree nodes. This process is repeated until there's just one node, which is called the root of the tree. The root hash is then used as the unique representation of the transactions, is saced in block headers, and is used in the proof-of-work system
 
 The benefit of Merkle trees is that a node can verify membership of certain transaction without downloading the whole block. Just a transaction hash, a Merkle tree root hash, and merkle path are required for this.
+
+
+**This is very important**: without a network and without a majority of nodes sharing identical rules, these rules are useless!
+
+## Blockchain Network
+
+Blockchain network is decentralized, which means there're no servers that do stuff and clients that use servers to get or process data. In blockchain network there are nodes, and each node is a full-fledged member of the network. A node is everything: it's both a client and a server. This is very important to keep in mind, because it's very different from web apps.
+
+Blockchain network is P2P network, which means that nodes are connected directly to each other. It's topology is flat, since there are no hierarchy in node roles.
+
+Nodes in such network are more difficult to implement, because they have to perform a lot of operations. Each node must interact with multiple other nodes, it must request other node’s state, compare it with it’s own state, and update its state when it’s outdated.
+
+## Node Roles
+
+
+blockchain nodes can play different roles in the network:
+
+1. Miner: Such nodes are run on powerful or specialized hardware (like ASIC), and  their only goal is to mine new blocks as fast as possible. Miners are only possible in blockchains that use Proof-of-work, because mining actually means solving PoW puzzles. In Proof-of-Stake blockchains, for example, there is no mining
+2. Full node: These nodes validate blocks mined by miners and verify transactions. To do this, they must have the whole copy of blockchain. Also, such nodes perform such routing operations, like helping other nodes to discover each other.
+It is very crucial for network to have many full nodes, because it's these nodes that make decisions: they decide if a block or transaction is valid
+3. SPV: SPV stands for Simplified Payment Verification. These nodes don't store a full copy of blockchain, but they still be able to verify transactions (not all of them, but a subset, for example, those that were sent to specific address).
+An SPV node depends on a full node to get data from, and there could be many SPV nodes connected to one full node. SPV makes wallet applications possible: one don't need to download full blockchain, but still can verify their transactions.
+
+## Network Simplification
+
+To implement network in our blockchain, we have to simplify some things. The problem is that we don't have many computers to simulate a network with multiple nodes. We could've used docker or containers but it would bring issues related to virtual machine or docker issues, while my goal is to concentrate on blockchain implementation only. So we want to run multiple blockchain nodes on a single machine which we will achieve it by using ports for simulation instead of IP addresses such as: `127.0.0.1:3000`, `127.0.0.1:3001`
+
+In our implementation, there will be centralization though. We’ll have three nodes:
+
+The central node. This is the node all other nodes will connect to, and this is the node that’ll sends data between other nodes.
+A miner node. This node will store new transactions in mempool and when there’re enough of transactions, it’ll mine a new block.
+A wallet node. This node will be used to send coins between wallets. Unlike SPV nodes though, it’ll store a full copy of blockchain.
+
+## The Scenario
+
+The goal of this  is to implement the following scenario:
+1. The central node creates a blockchain
+2. Other (wallet) node connects to it and downloads the blockchain
+3. One more (miner) node connects to the central node and downloads the blockchain
+4. The wallet node creates a transaction
+5. The miner node receives the transaction and keeps it in memory pool
+6. Where there are enough transactions in the memory pool, the miner starts mining a new block.
+7.  When a new block is mined, it's send to the central node.
+8. The wallet node synchronizes with the central node.
+8. User of the wallet node check that their payment was successful
