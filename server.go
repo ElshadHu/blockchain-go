@@ -34,7 +34,7 @@ type getblocks struct {
 	AddrFrom string
 }
 
-type getData struct {
+type getdata struct {
 	AddrFrom string
 	Type     string
 	ID       []byte
@@ -81,6 +81,12 @@ func bytesToCommand(bytes []byte) string {
 
 func extractCommand(request []byte) []byte {
 	return request[:commandLength]
+}
+
+func requestBlocks() {
+	for _, node := range knownNodes {
+		sendGetBlocks(node)
+	}
 }
 
 func sendAddr(address string) {
@@ -139,7 +145,7 @@ func sendGetBlocks(address string) {
 }
 
 func sendGetData(address, kind string, id []byte) {
-	payload := gobEncode(getData{nodeAddress, kind, id})
+	payload := gobEncode(getdata{nodeAddress, kind, id})
 	request := append(commandToBytes("getdata"), payload...)
 
 	sendData(address, request)
@@ -305,7 +311,7 @@ func handleTx(request []byte, bc *Blockchain) {
 
 	if nodeAddress == knownNodes[0] {
 		for _, node := range knownNodes {
-			if node != nodeAddress && node != payload.AddFrom {
+			if node != nodeAddress && node != payload.AddrFrom {
 				sendInv(node, "tx", [][]byte{tx.ID})
 			}
 		}
