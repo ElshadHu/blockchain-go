@@ -30,7 +30,6 @@ func (cli *CLI) send(from, to string, amount int, nodeID string, mineNow bool) {
 		txs := []*Transaction{cbTx, tx}
 
 		newBlock := bc.MineBlock(txs)
-		UTXOSet.Update(txs)
 		UTXOSet.Update(newBlock)
 	} else {
 		sendTx(knownNodes[0], tx)
