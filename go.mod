@@ -3,7 +3,7 @@ module blockchain.go
 go 1.25.0
 
 require (
-	github.com/boltdb/bolt v1.3.1
+	go.etcd.io/bbolt v1.5.0
 	golang.org/x/crypto v0.55.0
 )
 

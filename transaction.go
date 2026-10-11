@@ -6,11 +6,11 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/gob"
 	"encoding/hex"
 	"fmt"
 	"log"
-	"math/big"
 	"strings"
 )
 
@@ -41,6 +41,38 @@ func (tx Transaction) Serialize() []byte {
 	return encoded.Bytes()
 }
 
+// canonicalBytes returns a fixed byte layout of the transaction for hashing.
+// Gob output is not stable across processes, so it is never hashed.
+func (tx Transaction) canonicalBytes() []byte {
+	var buf bytes.Buffer
+
+	writeBytes := func(b []byte) {
+		binary.Write(&buf, binary.BigEndian, uint64(len(b)))
+		buf.Write(b)
+	}
+	writeInt := func(n int) {
+		binary.Write(&buf, binary.BigEndian, int64(n))
+	}
+
+	writeBytes(tx.ID)
+
+	writeInt(len(tx.Vin))
+	for _, in := range tx.Vin {
+		writeBytes(in.Txid)
+		writeInt(in.Vout)
+		writeBytes(in.Signature)
+		writeBytes(in.PubKey)
+	}
+
+	writeInt(len(tx.Vout))
+	for _, out := range tx.Vout {
+		writeInt(out.Value)
+		writeBytes(out.PubKeyHash)
+	}
+
+	return buf.Bytes()
+}
+
 // Hash returns the hash of the Transaction
 func (tx *Transaction) Hash() []byte {
 	var hash [32]byte
@@ -48,7 +80,7 @@ func (tx *Transaction) Hash() []byte {
 	txCopy := *tx
 	txCopy.ID = []byte{}
 
-	hash = sha256.Sum256(txCopy.Serialize())
+	hash = sha256.Sum256(txCopy.canonicalBytes())
 
 	return hash[:]
 }
@@ -71,14 +103,15 @@ func (tx *Transaction) Sign(privKey ecdsa.PrivateKey, prevTXs map[string]Transac
 		prevTx := prevTXs[hex.EncodeToString(vin.Txid)]
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
-		dataToSign := fmt.Sprintf("%x\n", txCopy)
+		// ECDSA signs a 32-byte digest, not the raw data
+		digest := sha256.Sum256(fmt.Appendf(nil, "%x\n", txCopy))
 
-		r, s, err := ecdsa.Sign(rand.Reader, &privKey, []byte(dataToSign))
+		signature, err := ecdsa.SignASN1(rand.Reader, &privKey, digest[:])
 		if err != nil {
 			log.Panic(err)
 		}
-		signature := append(r.Bytes(), s.Bytes()...)
 		tx.Vin[inID].Signature = signature
+		txCopy.Vin[inID].PubKey = nil
 	}
 }
 
@@ -142,22 +175,14 @@ func (tx *Transaction) Verify(prevTXs map[string]Transaction) bool {
 		txCopy.Vin[inID].Signature = nil
 		txCopy.Vin[inID].PubKey = prevTx.Vout[vin.Vout].PubKeyHash
 
-		r := big.Int{}
-		s := big.Int{}
-		sigLen := len(vin.Signature)
-		r.SetBytes(vin.Signature[:(sigLen / 2)])
-		s.SetBytes(vin.Signature[(sigLen / 2):])
+		digest := sha256.Sum256(fmt.Appendf(nil, "%x\n", txCopy))
 
-		x := big.Int{}
-		y := big.Int{}
-		keyLen := len(vin.PubKey)
-		x.SetBytes(vin.PubKey[:(keyLen / 2)])
-		y.SetBytes(vin.PubKey[(keyLen / 2):])
-
-		dataToVerify := fmt.Sprintf("%x\n", txCopy)
-
-		rawPubKey := ecdsa.PublicKey{curve, &x, &y}
-		if ecdsa.Verify(&rawPubKey, []byte(dataToVerify), &r, &s) == false {
+		uncompressed := append([]byte{0x04}, vin.PubKey...)
+		pubKey, err := ecdsa.ParseUncompressedPublicKey(curve, uncompressed)
+		if err != nil {
+			return false
+		}
+		if !ecdsa.VerifyASN1(pubKey, digest[:], vin.Signature) {
 			return false
 		}
 		txCopy.Vin[inID].PubKey = nil

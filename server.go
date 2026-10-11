@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 )
@@ -234,7 +233,7 @@ func handleInv(request []byte, bc *Blockchain) {
 
 		newInTransit := [][]byte{}
 		for _, b := range blocksInTransit {
-			if bytes.Compare(b, blockHash) != 0 {
+			if !bytes.Equal(b, blockHash) {
 				newInTransit = append(newInTransit, b)
 			}
 		}
@@ -386,7 +385,7 @@ func handleVersion(request []byte, bc *Blockchain) {
 }
 
 func handleConnection(conn net.Conn, bc *Blockchain) {
-	request, err := ioutil.ReadAll(conn)
+	request, err := io.ReadAll(conn)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -406,6 +405,8 @@ func handleConnection(conn net.Conn, bc *Blockchain) {
 	case "getdata":
 		handleGetData(request, bc)
 	case "tx":
+		handleTx(request, bc)
+	case "version":
 		handleVersion(request, bc)
 	default:
 		fmt.Println("Unknown command!")
@@ -414,7 +415,7 @@ func handleConnection(conn net.Conn, bc *Blockchain) {
 
 // StartServer starts a node
 func StartServer(nodeID, minerAddress string) {
-	nodeAddress := fmt.Sprintf("localhost:%s", nodeID)
+	nodeAddress = fmt.Sprintf("localhost:%s", nodeID)
 	miningAddress = minerAddress
 	ln, err := net.Listen(protocol, nodeAddress)
 	if err != nil {

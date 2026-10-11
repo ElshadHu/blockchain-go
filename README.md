@@ -1,388 +1,255 @@
 # blockchain-go
 
-When it comes to `Block` entity:
+A Bitcoin-style blockchain written from scratch in Go. It has proof-of-work mining, a persistent chain stored in BoltDB, ECDSA wallets with Base58 addresses, signed UTXO transactions, a cached UTXO set, Merkle-tree transaction roots, and a TCP peer-to-peer layer that lets several nodes run on one machine and sync with each other.
 
-`Timestamp` is the current timestamp (when the block is created)
-`Data` is the actual valuable information containing in the block
-`Hash` is the hash of the block
-`PrevBlockHash` stores the hash of the previous block
+Everything lives in a single `main` package. There are no frameworks and no external crypto beyond the Go standard library, `golang.org/x/crypto/ripemd160`, and BoltDB via its maintained fork `go.etcd.io/bbolt`.
 
-## Blockchain
+## Getting started
 
-In its essence blockchain is just a database with certain structure: it's an ordered, back-linked list. Which means that blocks are stored in the insertion order and that each block is linked to the previous one. This structure allow to quickly get the latest block in  a chain and to efficiently get a block by its hash.
+Build with `go build -o blockchain .` and set `NODE_ID` before running anything. It selects which database and wallet file a command touches (`blockchain_<NODE_ID>.db`, `wallet_<NODE_ID>.dat`) and doubles as the TCP port when the node is started as a server.
 
-In Golang this structure can be implemented by using an array and a map:
-the array would keep ordered hashes, and the map would keep hash -> block pairs (maps are unordered). But for out blockchain prototype we will just use an array, because we don't need to get blocks by their hash for now.
+[COMMANDS.md](COMMANDS.md) has the full command sequences: a single-node walkthrough with expected balances, the error cases, and the experimental three-node network setup.
 
-To add a new block we need an existing block, but there're not blocks in our blockchain! So, in any blockchain, there must be at least one block, and such block, the first in the chain, is called genesis block.
+## Commands
 
-## Proof-of-Work
+| Command | What it does |
+|---|---|
+| `createwallet` | Generates a new ECDSA key pair and appends it to the wallet file |
+| `listaddresses` | Prints every address in the wallet file |
+| `createblockchain -address A` | Mines the genesis block and pays its coinbase reward to `A` |
+| `getbalance -address A` | Sums the unspent outputs locked to `A` using the UTXO set |
+| `send -from A -to B -amount N [-mine]` | Builds and signs a transaction. With `-mine` the sending node mines the block itself, otherwise the transaction is broadcast to the central node |
+| `printchain` | Walks the chain from the tip back to genesis and prints every block |
+| `reindexutxo` | Rebuilds the UTXO set from the full chain |
+| `startnode [-miner A]` | Starts a TCP node on `localhost:<NODE_ID>`. With `-miner`, the node mines blocks from its mempool and pays rewards to `A` |
 
-This whole "do hard work and prove" mechanism is called proof-of-work.
-It is hard because it requires a lot of computational power: even high performance computers cannot do it quickly. In Bitcoin the goal of such work is to find a hash for a block. that meets our requirements. And it's this hash that serves as a proof. Thus, finding a proof is the actual work.
+## How it fits together
 
+```
+                        ┌───────────┐
+                        │    CLI    │
+                        └─────┬─────┘
+                              │
+        ┌─────────────┬───────┴────────┬──────────────┐
+        ▼             ▼                ▼              ▼
+  ┌───────────┐ ┌────────────┐ ┌─────────────┐ ┌────────────┐
+  │  Wallets  │ │ Blockchain │ │   UTXOSet   │ │   Server   │
+  │ wallet_*  │ │  (blocks   │ │ (chainstate │ │TCP :NODE_ID│
+  │   .dat    │ │   bucket)  │ │   bucket)   │ │            │
+  └─────┬─────┘ └─────┬──────┘ └──────┬──────┘ └─────┬──────┘
+        │             │               │              │
+        │     ┌───────┴───────┐       │              │
+        │     ▼               ▼       │              │
+        │ ┌────────┐  ┌──────────────┐│              │
+        │ │ Block  │  │ ProofOfWork  ││              │
+        │ │ +Merkle│  └──────────────┘│              │
+        │ └───┬────┘                  │              │
+        │     ▼                       │              │
+        └─▶ Transaction ◀─────────────┘ ◀────────────┘
+            (sign / verify, inputs, outputs)
+```
 
-## Hashing
+The `Blockchain` and `UTXOSet` types share one BoltDB file; they just use different buckets. The `Server` holds its own `Blockchain` handle and talks to other nodes over TCP.
 
-1. Original data cannot be restored from a hash. Thus hashing is not enrcyption.
-2. Certain data can have only one hash and the hash is unique
-3. Changin even one byte in input data will result in a completely different hash
+## Blocks
 
-In blockchain, hashing is used to guarantee the consistency of a block. The input data for a hashing algorithm contains the hash of the previous block, thus making it impossible to modify a block in the chain: one hash to recalculate its hash and hashes of all the blocks after it.
-
-Bitcoin uses Hashcash, a Proof-of-Work algorithm that was initially developed to prevent email spam. It can be split into the following steps:
-
-1. Take some publicly known data (in case of email, it's receiver's email address, in case Bitcoin, it's block headers)
-2. Add a counter to it. The counter starts at 0.
-3. Get a hash of the data + counter combination.
-4. Check that the hash meets certain requirements.
-1. If it down you're done
-2. If it doesn't, increase the counter and repeat the steps 3 and 4.
-
-24 is an arbitrary number, our goal is to have a target that takes less than 256 bits in memory. And we want the difference to be significant enoguh, but not too big, because the bigger the difference the more difficult it's to find a proper hash
-
-## Persistence and CLI
-
-So far, we've built a blockchain with a proof-of-work system, which makes mining possiblem. We need to store a blockchain in a database, after that we will make a simple command-line interface to perform operations with the blockchain.
-Blockchain is distributed but now and focus on the database part
-
-## What We Use
-
-We will use BoltDB, because:
-1. It's simple and minimalistic.
-2. It's implemented in Go.
-3. It doesn't require to run a server
-4. It allows to build the data structure we want
-
-BoltDB is a key/value storage. Key/Value pairs are stored in buckets, which are  intended to group similar pairs. There are no datatypes and it is just a byte array whcih meains we need to serialize them. We will use encoding/gob because it is simple and is the part of standard Go library. We will need to serialize Go structs , implement a mechanism of converting a Go struct into a byte array and restoring it back from a byte array.
-
-## Database Structure
-
-We will use two buckets to store data:
-
-1. `blocks` stores metadata 
-2. `chainstate` store the state of a chain, which is all currently unspent transaction outputs and some metadata
-
-We will store the whole DB as a single file, without storing blocks in separate files. So we won't need anything related to file numbers.:
-
-`32-byte block-hash -> Block structure (serialized)`
-`'l' -> the hash of the last block in a chain`
-
-When it comes to BoltDB, operations with a database are run withing a transaction. And there are two types of transactions: 
-read only and read-write.
-
-Also we store DB connection, because we want it open it once and keep it open while the program is running. Thus,the Blockchain structure now looks like this:
 ```go
-type Blockchain struct {
-    top []byte
-    db *bolt.DB
+type Block struct {
+    Timestamp     int64
+    Transactions  []*Transaction
+    PrevBlockHash []byte
+    Hash          []byte
+    Nonce         int
+    Height        int
 }
 ```
 
-From now on we need to store blocks in the DB.
-All new blocks are now saved in a database, so we can reopen a blockchain and add a new block to it.
-But after implementing this, we lost a nice feature:
-we cannot print out blockchain blocks anymore because we don't store blocks in an array any longer. Let's fix this flaw!
+A block's hash is computed over its previous hash, its Merkle root, its timestamp, the difficulty and the nonce. Because the previous hash is part of the input, altering any block changes its hash and therefore invalidates every block after it. The first block in the chain is the genesis block. It is the only block with an empty `PrevBlockHash`, and it is created by `createblockchain`.
 
-BoltDB allows to iterate over all the keys in a bucket, but the keys are stored in byte-sorted order, and we want blocks to be printed in the order they take in a blockchain. 
-Also, because we don't want to load all the blocks into memory (our blockchain DB could be huge!.. or let's just pretend it could), we'll read them one by one. For this purpose, we'll need a blockchain iterator
+```
+  genesis            block 1            block 2
+┌───────────┐      ┌───────────┐      ┌───────────┐
+│ Prev: ""  │◀─────│ Prev: h0  │◀─────│ Prev: h1  │◀─── tip ("l" key)
+│ Hash: h0  │      │ Hash: h1  │      │ Hash: h2  │
+│ Height: 0 │      │ Height: 1 │      │ Height: 2 │
+└───────────┘      └───────────┘      └───────────┘
+```
 
-## CLI
+## Proof-of-work
 
-Until now our implementation hasn't provided any interface to interact with the program: we've simply executed `NewBlockChain`,`bc.AddBlock`
+Mining is the Hashcash scheme Bitcoin uses. The miner concatenates the block header fields with a nonce, hashes the result with SHA-256, and checks whether the hash, read as a 256-bit integer, is below a target. If it isn't, the nonce is incremented and the hash is recomputed.
 
-We want to have these commands:
-`blockchain_go addblock "Pat 0.0333 for a coffee"`
-`blockchain_go printchain`
+```
+target = 1 << (256 - targetBits)        // targetBits = 16 in proofofwork.go
 
-All command-line related operations will be processed by the `CLI` struct
+nonce = 0
+loop:
+    hash = SHA256(prevHash ‖ merkleRoot ‖ timestamp ‖ targetBits ‖ nonce)
+    if int(hash) < target: done
+    nonce++
+```
+
+`targetBits` fixes the number of leading zero bits a valid hash must have. A larger value makes the search exponentially harder. Validation is cheap: any node can recompute the hash once and compare it with the target. `printchain` prints `PoW: true` for every block it validates.
+
+## Hashing properties the design relies on
+
+1. A hash cannot be reversed into its input. Hashing is not encryption.
+2. The same input always produces the same hash.
+3. Changing a single byte of the input produces an unrelated hash.
+
+These three properties are what make the back-linked chain tamper-evident and what make proof-of-work a fair lottery.
+
+## Persistence
+
+Storage is BoltDB, a single-file key/value store written in Go that needs no server process. Values are plain byte slices, so structs are serialized with `encoding/gob` before being written and decoded after being read.
+
+Two buckets are used in `blockchain_<NODE_ID>.db`:
+
+```
+blocks bucket
+  <32-byte block hash>  ->  gob(Block)
+  "l"                   ->  hash of the latest block (the tip)
+
+chainstate bucket
+  <transaction ID>      ->  gob(TXOutputs)   // only the outputs still unspent
+```
+
+The `Blockchain` struct holds just the tip hash and the open database handle:
+
 ```go
-type CLI struct {
-    bc *Blockchain
+type Blockchain struct {
+    tip []byte
+    db  *bolt.DB
 }
 ```
 
 ## Transactions
 
-Transactions are the heart of Bitcoin and the only purpose of blockchain is to store transactions in a secure and reliable way, so no would modify them after they are created.
-
-If you have developed a web app, in order to implement payments you would likely to create `accounts` and `transactions` tables.
-In Bitcoin, payments are realized in completely different way. There are:
-1. No accounts.
-2. No balances.
-3. No addresses.
-4. No coins.
-5. No senders and receivers
-
-Since blockchain is a public and open db, we don't want to store sensitive data about wallet owners.
-
-### Bitcoin Transaction
-
-A transaction is a combination of inputs and outputs
+A transaction is a list of inputs and a list of outputs. There are no accounts and no balances. Value is held in outputs, and an input is a reference to an earlier output plus the proof needed to spend it.
 
 ```go
 type Transaction struct {
-    ID []byte
-    Vin []TXInput
+    ID   []byte       // SHA-256 of the canonical encoding, before signing
+    Vin  []TXInput
     Vout []TXOutput
 }
-```
-Inputs of a new transaction reference outputs of a prev transaction.(there is an exception though which will be discusssed later).
-Outputs are where coints are actually stored.
 
-`ScriptPubKey` will store an arbitrary string(user defined wallet address).
-One important thing about outputs is that they are **indivisible**.
+type TXOutput struct {
+    Value      int
+    PubKeyHash []byte   // who can spend this output
+}
 
-Here is the input of the transaction
-
-```go
 type TXInput struct {
-Txid []byte
-Vout int
-ScriptSig string
+    Txid      []byte    // transaction that holds the output being spent
+    Vout      int       // index of that output
+    Signature []byte
+    PubKey    []byte    // raw public key of the spender
 }
 ```
-`ScriptSig` is a script which provides data to be used in an output's `ScriptPubKey`. 
-If the data is correct the output can be unlocked, and its value can be used to generate new outputs; if it's not correct, the output cannot be referenced in the input. This is the mechanism that guarantees that users cannot spend coins belonging to other people.
 
-We will implement keys and signatures checking in the next one, currently it `ScriptSig` will be store an arbitrary user defined wallet address.
+Outputs are indivisible. Spending 4 coins from an output worth 10 creates two new outputs: 4 for the recipient and 6 of change back to the sender.
 
-Let's sum it up. Outputs are where "coins" are stored. Each output comes with an unclocking script, which determines the logic of unlocking the output.
-Every new transaction must have at least one input one output. An input references an output from a previous transaction and provides data (the `ScriptSig` field) that is used in the output's unlocking script to unlock and use its value to create new outputs.
+Instead of Bitcoin's Script language, locking and unlocking are plain methods. An output is locked to a public-key hash. An input unlocks it when the hash of the input's `PubKey` matches the output's `PubKeyHash` and the input's signature verifies.
 
-But what came first: inputs or outputs?
+### Coinbase transactions
 
-# The egg
+Every block starts with a coinbase transaction. It has a single input with an empty `Txid` and `Vout` set to `-1`, references nothing, and creates `subsidy` coins (currently a constant of 10) out of nowhere. This is the miner's reward and the only place new coins enter the system. The genesis block's coinbase is what funds the very first address.
 
-In Bitcoin, it's the egg that came before the chicken. The inputs-referencing-outputs logic is the classical "chicke or the egg" situation:
-inputs produce outputs and outputs make inputs possible. And in Bitcoin, outputs come before inputs.
 
-When a miner starts mining a block, it adds a coinbase transaction to it. A `coinbase transaction` is a special type of transactions, which doesn't require previously existing outputs. It creates outputs ("coins") out of nowhere
-The egg without a chicken. This is the reward miners get for mining new blocks.
+### Lifecycle of a payment
 
-As you know, there’s the genesis block in the beginning of a blockchain. It’s this block that generates the very first output in the blockchain. And no previous outputs are required since there are no previous transactions and no such outputs.
+1. The genesis block's coinbase creates the first output, locked to one address.
+2. `send` looks up enough unspent outputs for the sender, builds a transaction with inputs referencing them, adds a change output if needed, and signs every input.
+3. The transaction either goes straight into a locally mined block (`-mine`) or is sent to the central node, which relays it to the miner.
+4. The miner verifies every transaction in its mempool, adds its own coinbase, and mines the block.
+5. The new block is announced to the other nodes, which fetch it, verify its proof-of-work, and append it.
+6. Each node updates its UTXO set. The outputs of the new transaction can now be spent.
 
-Coinbase transaction has only one input. In our implementation its Txid is empty and `Vout` equals to -1. Also a coinbase transaction doesn't store a script in `ScriptSig`. Instead an arbitrary data is stored there.
+## Wallets and addresses
 
-`subsidy` is the amount of reward. In Bitcoin, this number is not stored anywhere and calculated based only on the total number blocks:
-the number of blocks divided by `210000`. Mining the genesis block produced 50 BTC, and every 210000 blocks the reward is halved. In our implementation, we will store the reward as a constanst (at least for now)
-
-### Storing Transactions In Blockchain
-
-From now on, every block must store at least one transaction and it's no more possible to mine blocks without transactions. This means that we should remove the `Data` field of `Block` and store transactions instead
-
-Again, we are using hashing as a mechanism of providing unique representation of data. We want all transactions in a block to be uniquely identified by single hash
-
-## Unspent Transaction Outputs
-
-Wen eed to find all unspent transaction outputs. Unspent means that these outputs weren't referenced in any inputs.
-
-Of course, when we check balance, we don't need all of them, but only those can be unblocked by the key we own (currently we don't have keys implemented and will use user defined addresses instead). First let's define locking-unlocking methods on inputs and outputs.
-
-Since transactions are stored in blocks, we have to check every block in a blockchain. We start with outputs:
+A wallet is a key pair:
 
 ```go
-if out.CanBeUnlockedWith(address) {
-	unspentTXs = append(unspentTXs, tx)
+type Wallet struct {
+    PrivateKey ecdsa.PrivateKey
+    PublicKey  []byte   // X ‖ Y of the public point
 }
 ```
 
-If an output was locked by the same address we're searching unspent transaction outputs for, then this is the output we want. But before taking it, we need to check if an output was already referenced in an input:
+`Wallets` keeps a map of address to wallet and persists it with gob to `wallet_<NODE_ID>.dat`. The private key never leaves that file.
 
-```go
-if spentTXOs[txID] != nil {
-    for _, spentOut := range spentTXOs[txID] {
-        if spentOut == outIdx {
-            continue Outputs
-        }
-    }
-}
+Raw public keys are long and unreadable, so an address is derived from the public key the same way Bitcoin derives one:
+
+```
+            PublicKey
+                │
+                ▼
+     RIPEMD160( SHA256( PublicKey ) )
+                │
+                ▼
+            PubKeyHash  (20 bytes)
+                │
+                ▼
+   version ‖ PubKeyHash                    version = 0x00
+                │
+                ├────────────────────────────┐
+                │                            ▼
+                │              SHA256( SHA256( version ‖ PubKeyHash ) )
+                │                            │
+                │                      first 4 bytes = checksum
+                │                            │
+                ▼                            ▼
+   version ‖ PubKeyHash ‖ checksum   (1 + 20 + 4 = 25 bytes)
+                │
+                ▼
+          Base58Encode
+                │
+                ▼
+            Address
 ```
 
-## Public-key Cryptography
-
-Public-key cryptography algorithms use pairs of keys: public and private keys. Public keys are not sensitive and can be disclosed to anyone.
-
-Private and public keys are just random sequences of bytes, thus they cannot be printed on the screen and read by a human. That’s why Bitcoin uses an algorithm to convert public keys into a human readable string.
-
-
-## Digital Signatures
-
-In maths and cryptography there is a concept of digital signature - algorithms that guarantee:
-1. that data wasn't modified while being transferred from a sender to a recipient
-2. that data was created by a certain sender
-3. that the sender cannot deny sending the data
-
-Digital signing happens with the usage of private key, and verification requires a public key.
-
- In order to sign we need two things:
- 1. data to sign;
- 2. private key;
-
- The operation of signing produces a signature, which is stored in transaction inputs. In order to verify a signature, the following is required:
-
- 1. data that was signed
- 2. the signature
- 3. public key
-
-
- Digital signatures are not encryption, you cannot reconstruct the data from a signature. This is similar to hashing: you run data through a hashing algorithm and get a unique representation of the data. The difference between signatures and hashes is key pairs: they make signature verification possible.
-But key pairs can also be used to encrypt data: a private key is used to encrypt, and a public key is used to decrypt the data. Bitcoin doesn’t use encryption algorithms though.
-
-Every transaction input in Bitcoin is signed by the one who created transaction. Every transaction must be verified before being put in a block. Verification means:
-1. Checking that inputs have permission to use outputs from previous transactions
-2. Checking that the transaction signature is correct.
-
-Schematically it loos like this
-
-                    Signing
-    Private Key  + Data  = Signature
-    key/pair        Copy     Copy
-                    Verification
-    Public Key  + Data   = Signature
-
-
-Let's now review the full lifecycle of the transaction:
-1. In the beginning, there is the genesis block that contains a coinbase transaction. there are no real inputs in coinbase transactions, so signing is not necessary.
-The output of the coinbase transaction contains a hashed public key
-2. When one sends coins, a transaction is created. Inputs of the transaction will reference outpus from prev transactions. Every input will store a public key (not hashed) and a signature of the whole transaction
-3. Other nodes in the Bitcoin netwoek that receive the transaction will verify it. Besides other thing, they will check that:
-the hash of the public key in an input matchs the hash of the referenced output (this ensures that the sender spends only coins belonging to them); the signature is correct.
-4. When a miner node is ready to mine a new block, it'll put the transaction in a block and start mining it
-5. When the block is mined, every other node in the network receives a message saying the block is mined and adds the block to the blockchain.
-5. After the block is added to the block chain, the transaction is completed, its outputs can be referenced in new transactions.
-
-## Elliptic Curve Cryptography
-
-Public and private keys are sequences of random bytes.
-Since it's private keys are used to identify owners of coins, there's a required condition: the randomness algorithm must produce truly random bytes. We don't want to accidentally generate a private key that's owned by someone else. What we need to know is that these curves can be used to generate really big and random numbers
-
-## Base58
-
-Bitcoinused the Base58 algorithm to convert public keys into human readable format. The algorithm is very similar
-to a famous Base64, but it uses shorter alphabet: some letters were removed from the alphabet to avoid some attacks that use letters similarity.
-Thus, there are no these symbols: 0 (zero), O (capital o), I (capital i), l (lowercase L), because they look similar. Also, there are no + and / symbols.
-
-
-Thus, the above mentioned decoded public key consists of three parts:
-
-Version  Public key hash                           Checksum
-00       62E907B15CBF27D5425399EBF6F0FB50EBB88F18  C29B7D93    
-
-Overall structure for base58 is 
-
-                Public Key
-                  |
-            RIPEMD160(SHA256(PubKey))
-                        |            |
-    Version+            Public key has      +        SHA256 (SHA256(PubKeyHash))
-
-                    |
-                    Base58Encode
-                    |
-                    BitcoinAddress
-
-
-## Wallet
-
-A wallet is nothing but a key pair. We'll also need the Wallets type to keep a collection of wallets, save them to file, and load them from it. in the construction function os `Wallet` a new key pair is generated.
-
-Heare are the steps to convert a public key into Base58 address:
-1. Take the public key and hash it twice with RIPEMD(SHA256(PubKey)) hashing algorithms
-2. Prepend the version of the address generation algo to the hash
-3. Calculate the checksum by hashing the result of step 2 with SHA256(SHA256(payload)). The checksum is the first four bytes of the resulted hash
-4. Append the checksum to the `version + PubKeyHash` combination
-4. Encode the `version + PubKeyHash + checksum` combination with Base58
-
-Notice, we no longer use `ScriptPubKey` and `ScriptSig` fields, because we are not going to implement a scripting language. . Instead, ScriptSig is split into Signature and PubKey fields, and ScriptPubKey is renamed to PubKeyHash. We’ll implement the same outputs locking/unlocking and inputs signing logics as in Bitcoin, but we’ll do this in methods instead.
-
-
-
-### The UTXO Set
-
-we told the way Bitcoin Core stores blocks in a database. It was said that blocks are stored in blocks and db and transaction outputs are stored in blocks db and transaction outputs are stored in chainstate.
-
-Since that article, we’ve already implemented transactions, but we haven’t used the chainstate to store their outputs. So, this is what we’re going to do now.
-
-chainstate doesn’t store transactions. Instead, it stores what is called the UTXO set, or the set of unspent transaction outputs. Besides this, it stores “the block hash up to which the database represents the unspent transaction outputs”, which we’ll omit for now because we’re not using block heights (but we’ll implement them in next articles).
-
-The function finds transactions with unspent outputs. Since transactions are stored in blocks, it iterates over each block in the blockchain and checks every transaction in it. As of September 18, 2017, there’re 485,860 blocks in Bitcoin and the whole database takes 140+ Gb of disk space. This means that one has to run a full node to validate transactions. Moreover, validating transactions would require iterating over many blocks.
-
-The solution to the problem is to have an index that stores only unspent outputs, and this is what UTXO set does: this is a cache that is built from all blockchain transactions (by iterating over blocks,yes, but this is done only once), and is later used to calculate balance and validate new transactions. The UTXO set is about 2.7 GB as of sep of 2017.
-
-Blockchain.FindUnspentTransactions – the main function that finds transactions with unspent outputs. It’s this function where the iteration of all blocks happens.
-Blockchain.FindSpendableOutputs – this function is used when a new transaction is created. If finds the enough number of outputs holding required amount. Uses Blockchain.FindUnspentTransactions.
-Blockchain.FindUTXO – finds unspent outputs for a public key hash, used to get balance. Uses Blockchain.FindUnspentTransactions.
-Blockchain.FindTransaction – finds a transaction in the blockchain by its ID. It iterates over all blocks until finds it.
-
-So what we want is the following methods:
-
-1. `Blockchain.FindUTXO` - find all unspent outputs by iterating over blocks
-2. `UTXOSet.Reindex` - uses `FindUTXO` to find unspent outputs, and stores them in a db. This where caching happens.
-3. `UTXOSet.FindSpendableOutputs` - – analog of Blockchain.FindSpendableOutputs, but uses the UTXO set.
-4. UTXOSet.FindUTXO - analog of `Blockchain.FindUTXO` but uses the UTXO set.
-5. `Blockchain.FindTransaction` remains the same.
-
-## Merkle Tree
-
-There is one more optimization mechanism I'd like to discuss in this post.
-
-As it was said above, the full Bitcoin database (blockchain) takes more than 140 GB of disk space. Because of the decentralized nature of Bitcoin, every node in the network must be independent and self-sufficient, every node must store a full copy of the blockchain. With many people starting using Bitcoin, this rule becomes more difficult to follow: it's not likely that everyone will run a full node. Also since nodes are full-fledged participants of the network, they have responsibilities: they must verify transactions and blocks. Also there's certain internet traffic required to interact with other nodes and download new blocks.
-
-In the original Bitcoin paper, there is a solution for this: Simplified Payment Verification (SPV). SPW is a light Bitcoin node that doesn't download the whole blockchain and doesn't verify blocks and transactions.
-Instead, it finds transactions in blocks (to verify payments) and is linked to a full node to retrieve just necessary data.This mechanism allows having multiple light wallet nodes with running just one full node.
-
-For SPV to be possible, there should be a way to check if a block contains certain transaction without downloading the whole block. And this is where Merkle tree comes into play.
-
-Merkle trees are used by Bitcoin to obtain transactions hash, which is then saved in block headers and is considered by the proof-ow-work system. Until now, we just concatenated hashes of each transaction in a block and applied SHA256 to them. This is also a good way of getting a unique represatation.This is also a good way of getting a unique representation of block transactions, but it doesn’t have benefits of Merkle trees.
-
-The number of the leaves in the merkle tree must be even. If it is odd, in that case there the last transaction is duplicated (in the merkle tree, not in the block)
-
-Moving from the bottom up, leaves are grouped in pairs, their hashes are concatenated and a new hash is obtained from the concatenated hashes. The new hashes form new tree nodes. This process is repeated until there's just one node, which is called the root of the tree. The root hash is then used as the unique representation of the transactions, is saced in block headers, and is used in the proof-of-work system
-
-The benefit of Merkle trees is that a node can verify membership of certain transaction without downloading the whole block. Just a transaction hash, a Merkle tree root hash, and merkle path are required for this.
-
-
-**This is very important**: without a network and without a majority of nodes sharing identical rules, these rules are useless!
-
-## Blockchain Network
-
-Blockchain network is decentralized, which means there're no servers that do stuff and clients that use servers to get or process data. In blockchain network there are nodes, and each node is a full-fledged member of the network. A node is everything: it's both a client and a server. This is very important to keep in mind, because it's very different from web apps.
-
-Blockchain network is P2P network, which means that nodes are connected directly to each other. It's topology is flat, since there are no hierarchy in node roles.
-
-Nodes in such network are more difficult to implement, because they have to perform a lot of operations. Each node must interact with multiple other nodes, it must request other node’s state, compare it with it’s own state, and update its state when it’s outdated.
-
-## Node Roles
-
-
-blockchain nodes can play different roles in the network:
-
-1. Miner: Such nodes are run on powerful or specialized hardware (like ASIC), and  their only goal is to mine new blocks as fast as possible. Miners are only possible in blockchains that use Proof-of-work, because mining actually means solving PoW puzzles. In Proof-of-Stake blockchains, for example, there is no mining
-2. Full node: These nodes validate blocks mined by miners and verify transactions. To do this, they must have the whole copy of blockchain. Also, such nodes perform such routing operations, like helping other nodes to discover each other.
-It is very crucial for network to have many full nodes, because it's these nodes that make decisions: they decide if a block or transaction is valid
-3. SPV: SPV stands for Simplified Payment Verification. These nodes don't store a full copy of blockchain, but they still be able to verify transactions (not all of them, but a subset, for example, those that were sent to specific address).
-An SPV node depends on a full node to get data from, and there could be many SPV nodes connected to one full node. SPV makes wallet applications possible: one don't need to download full blockchain, but still can verify their transactions.
-
-## Network Simplification
-
-To implement network in our blockchain, we have to simplify some things. The problem is that we don't have many computers to simulate a network with multiple nodes. We could've used docker or containers but it would bring issues related to virtual machine or docker issues, while my goal is to concentrate on blockchain implementation only. So we want to run multiple blockchain nodes on a single machine which we will achieve it by using ports for simulation instead of IP addresses such as: `127.0.0.1:3000`, `127.0.0.1:3001`
-
-In our implementation, there will be centralization though. We’ll have three nodes:
-
-The central node. This is the node all other nodes will connect to, and this is the node that’ll sends data between other nodes.
-A miner node. This node will store new transactions in mempool and when there’re enough of transactions, it’ll mine a new block.
-A wallet node. This node will be used to send coins between wallets. Unlike SPV nodes though, it’ll store a full copy of blockchain.
-
-## The Scenario
-
-The goal of this  is to implement the following scenario:
-1. The central node creates a blockchain
-2. Other (wallet) node connects to it and downloads the blockchain
-3. One more (miner) node connects to the central node and downloads the blockchain
-4. The wallet node creates a transaction
-5. The miner node receives the transaction and keeps it in memory pool
-6. Where there are enough transactions in the memory pool, the miner starts mining a new block.
-7.  When a new block is mined, it's send to the central node.
-8. The wallet node synchronizes with the central node.
-8. User of the wallet node check that their payment was successful
+Decoding reverses the last step, and the checksum lets `ValidateAddress` reject typos and corrupted strings without hitting the database. The 20-byte `PubKeyHash` in the middle is what gets stored in transaction outputs.
+
+Base58 is Base64 with the ambiguous characters removed: no `0`, `O`, `I` or `l`, and no `+` or `/`. That keeps addresses copyable by hand.
+
+## UTXO set
+
+A balance is the sum of the outputs an address has received and not yet spent. Scanning every block to find them gets slower as the chain grows, so the `chainstate` bucket keeps a copy of just the unspent outputs, keyed by transaction ID. `getbalance` and `send` read only that bucket.
+
+- `Reindex` rebuilds the bucket from the whole chain. `reindexutxo` runs it from the command line.
+- `Update` applies one new block: it removes the outputs the block spent and adds the ones it created.
+- `FindUTXO` returns the unspent outputs for an address. `FindSpendableOutputs` picks enough of them to cover an amount.
+
+## Merkle tree
+
+Instead of hashing all of a block's transactions in one go, each transaction is hashed on its own, then neighbouring hashes are paired and hashed again until a single hash is left. That last hash is the Merkle root, and it is what the proof-of-work covers.
+
+```
+                      root = H(H01 ‖ H23)
+                     ┌──────────┴──────────┐
+              H01 = H(H0 ‖ H1)      H23 = H(H2 ‖ H3)
+             ┌──────┴──────┐           ┌──────┴──────┐
+          H0 = H(tx0)   H1 = H(tx1)   H2 = H(tx2)   H3 = H(tx3)
+```
+
+If there is an odd number of hashes at any level, the last one is paired with itself. Each transaction is hashed from a fixed byte layout of its fields, not from its gob encoding, so every node computes the same root.
+
+The point of the tree is that proving one transaction is in a block takes only the hashes along its path to the root, not the whole block. That is what lets light wallets verify payments without storing the chain.
+
+## Project layout
+
+| File | Contents |
+|---|---|
+| `block.go` | `Block`, hashing of transactions via the Merkle tree, gob (de)serialization |
+| `blockchain.go` | `Blockchain`: create, open, mine, add, find transactions and unspent outputs, sign and verify |
+| `blockchain_iterator.go` | Tip-to-genesis iterator over the `blocks` bucket |
+| `proofofwork.go` | Hashcash mining and validation |
+| `transaction.go` | `Transaction`, coinbase creation, UTXO transaction building, signing and verification |
+| `transaction_input.go` / `transaction_output.go` | Input and output types with their lock and unlock methods |
+| `utxo_set.go` | The `chainstate` cache |
+| `merkle_tree.go` | Merkle tree construction |
+| `wallet.go` / `wallets.go` | ECDSA key pairs, address derivation and validation, wallet file persistence |
+| `base58.go` | Base58 encode and decode |
+| `server.go` | TCP node: message encoding, handlers, mempool, mining loop |
+| `cli.go` and `cli_*.go` | Command-line parsing and one file per command |
+| `utils.go` | Helpers such as `IntToHex` and `ReverseBytes` |

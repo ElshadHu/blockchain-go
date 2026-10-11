@@ -9,7 +9,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 const dbFile = "blockchain_%s.db"
