@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/gob"
 	"log"
 
 	"golang.org/x/crypto/ripemd160"
@@ -26,6 +27,47 @@ func NewWallet() *Wallet {
 	wallet := Wallet{private, public}
 
 	return &wallet
+}
+
+// walletGob is the on-disk form of a Wallet
+type walletGob struct {
+	D         []byte
+	PublicKey []byte
+}
+
+// GobEncode implements gob.GobEncoder
+func (w *Wallet) GobEncode() ([]byte, error) {
+	d, err := w.PrivateKey.Bytes()
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	err = gob.NewEncoder(&buf).Encode(walletGob{d, w.PublicKey})
+	if err != nil {
+		return nil, err
+	}
+
+	return buf.Bytes(), nil
+}
+
+// GobDecode implements gob.GobDecoder
+func (w *Wallet) GobDecode(data []byte) error {
+	var stored walletGob
+	err := gob.NewDecoder(bytes.NewReader(data)).Decode(&stored)
+	if err != nil {
+		return err
+	}
+
+	private, err := ecdsa.ParseRawPrivateKey(elliptic.P256(), stored.D)
+	if err != nil {
+		return err
+	}
+
+	w.PrivateKey = *private
+	w.PublicKey = stored.PublicKey
+
+	return nil
 }
 
 // GetAddress returns wallet address
@@ -80,7 +122,11 @@ func newKeyPair() (ecdsa.PrivateKey, []byte) {
 	if err != nil {
 		log.Panic(err)
 	}
-	pubKey := append(private.PublicKey.X.Bytes(), private.PublicKey.Y.Bytes()...)
+	uncompressed, err := private.PublicKey.Bytes()
+	if err != nil {
+		log.Panic(err)
+	}
+	pubKey := uncompressed[1:]
 
 	return *private, pubKey
 }
