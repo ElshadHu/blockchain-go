@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
 )
 
 // BlockchainIterator is used to iterate over blockchain blocks
